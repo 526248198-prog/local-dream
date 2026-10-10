@@ -1,0 +1,15 @@
+diff --git a/src/model_manager.cpp b/src/model_manager.cpp
+index f3bf19a..659567c 100644
+--- a/src/model_manager.cpp
++++ b/src/model_manager.cpp
+@@ -859,6 +859,10 @@ bool ModelManager::alloc_params_buffers(const std::vector<TensorState*>& states,
+             if (buffer == nullptr) {
+                 LOG_ERROR("model manager alloc params backend buffer failed, size = %.2fMB",
+                           chunk_size / (1024.0 * 1024.0));
++                // F2-DIAG(8gen3): name the failed chunk. An oversized tensor is
++                // allocated alone, so chunk[0] is the killer tensor.
++                LOG_ERROR("model manager F2DIAG failed chunk: %zu tensors, first tensor '%s'",
++                          chunk.size(), chunk.empty() ? "(empty)" : ggml_get_name(chunk[0]->tensor));
+                 return false;
+             }
+             ggml_backend_buffer_set_usage(buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);

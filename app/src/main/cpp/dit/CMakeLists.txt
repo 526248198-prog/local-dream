@@ -35,6 +35,8 @@ function(apply_local_patch patch_file work_dir)
 endfunction()
 apply_local_patch("${CMAKE_CURRENT_SOURCE_DIR}/stable-diffusion.cpp.patch" "${SDCPP_DIR}")
 apply_local_patch("${CMAKE_CURRENT_SOURCE_DIR}/ggml.patch" "${SDCPP_DIR}/ggml")
+apply_local_patch("${CMAKE_CURRENT_SOURCE_DIR}/sdcpp-f2diag.patch" "${SDCPP_DIR}")
+apply_local_patch("${CMAKE_CURRENT_SOURCE_DIR}/ggml-f2diag.patch" "${SDCPP_DIR}/ggml")
 
 set(GGML_HEXAGON ON CACHE BOOL "" FORCE)
 set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
@@ -73,8 +75,8 @@ set_target_properties(dit_engine PROPERTIES
 # The DSP-side skels are loaded by FastRPC at run time, so nothing links them
 # and EXCLUDE_FROM_ALL would otherwise leave them unbuilt. They ship in the
 # same package as the engine, so tie them to this target. The Android catalog
-# starts at SM8750 (HTP v79), so older skels would only add APK size.
-foreach(htp_version v79 v81)
+# starts at SM8750 (HTP v79); v75 (SM8650/8Gen3) builds for diagnostics only.
+foreach(htp_version v75 v79 v81)
     if(TARGET htp-${htp_version})
         add_dependencies(dit_engine htp-${htp_version})
     endif()

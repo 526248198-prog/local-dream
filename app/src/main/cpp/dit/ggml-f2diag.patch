@@ -1,0 +1,59 @@
+diff --git a/src/ggml-hexagon/ggml-hexagon.cpp b/src/ggml-hexagon/ggml-hexagon.cpp
+index f48c98c..1cc6674 100644
+--- a/src/ggml-hexagon/ggml-hexagon.cpp
++++ b/src/ggml-hexagon/ggml-hexagon.cpp
+@@ -537,6 +537,13 @@ struct ggml_backend_hexagon_buffer_type_context {
+     std::string                           name;
+ };
+ 
++// F2-DIAG(8gen3): process-wide DSP-mapping counters. Separate a release-path
++// leak (T2: total never drops after release) from a single-block ceiling
++// (T1/C: total low when the big block fails). Diagnostic only; loading is
++// threaded so treat the numbers as approximate.
++static size_t g_f2_mapped_total = 0;
++static int    g_f2_nbufs        = 0;
++
+ struct ggml_hexagon_rpcmem_block {
+     uint8_t * base = nullptr;
+     int       fd   = -1;
+@@ -555,9 +562,14 @@ struct ggml_hexagon_rpcmem_block {
+             throw std::runtime_error("ggml-hex: rpcmem_to_fd failed");
+         }
+         this->size = size;
++        g_f2_nbufs++;
++        GGML_LOG_INFO("ggml-hex: F2DIAG rpcmem alloc #%d size %zu MB (fd %d)\n",
++                g_f2_nbufs, size / (1024 * 1024), fd);
+     }
+ 
+     ~ggml_hexagon_rpcmem_block() {
++        g_f2_nbufs--;
++        GGML_LOG_INFO("ggml-hex: F2DIAG rpcmem free, #%d left (fd %d)\n", g_f2_nbufs, fd);
+         if (base) {
+             rpcmem_free(base);
+         }
+@@ -590,6 +602,10 @@ struct ggml_hexagon_shared_buffer {
+         HEX_VERBOSE("ggml-hex: %s mapped buffer: base %p size %zu fd %d pinned %u\n",
+                 sess->c_name(), (void *) base(), size(), fd(), pinned);
+ 
++        g_f2_mapped_total += size();
++        GGML_LOG_INFO("ggml-hex: F2DIAG mapped +%zu MB, total %zu MB (fd %d, pinned %u)\n",
++                size() / (1024 * 1024), g_f2_mapped_total / (1024 * 1024), fd(), (unsigned) pinned);
++
+         this->mapped = true;
+     }
+ 
+@@ -605,6 +621,14 @@ struct ggml_hexagon_shared_buffer {
+             fastrpc_munmap(sess->domain_id, fd(), (void *) base(), size());
+         }
+ 
++        if (g_f2_mapped_total >= size()) {
++            g_f2_mapped_total -= size();
++        } else {
++            g_f2_mapped_total = 0;
++        }
++        GGML_LOG_INFO("ggml-hex: F2DIAG unmapped -%zu MB, total %zu MB (fd %d, pinned %u)\n",
++                size() / (1024 * 1024), g_f2_mapped_total / (1024 * 1024), fd(), (unsigned) pinned);
++
+         HEX_VERBOSE("ggml-hex: %s unmapped buffer: base %p size %zu fd %d\n", sess->c_name(),
+                 (void *) base(), size(), fd());
+ 

@@ -49,11 +49,13 @@ cp "$BUILD_DIR/lib/arm64-v8a/libdit_engine.so" "$JNI_DIR/"
 # DSP. They go through assets and are copied to the runtime directory at
 # startup, the same path the QNN skels take, so packaging never depends on the
 # installer ignoring their architecture. The v79/v81 pair covers SM8750 and
-# the newer devices accepted by the app.
+# the newer devices accepted by the app; v75 (SM8650/8Gen3) builds for
+# diagnostics only.
 ASSET_DIR="$(cd ../.. && pwd)/assets/ditlibs"
 mkdir -p "$ASSET_DIR"
-rm -f "$ASSET_DIR/libggml-htp-v73.so" "$ASSET_DIR/libggml-htp-v75.so"
-cp "$BUILD_DIR"/sdcpp/ggml/src/ggml-hexagon/libggml-htp-v79.so \
+rm -f "$ASSET_DIR/libggml-htp-v73.so"
+cp "$BUILD_DIR"/sdcpp/ggml/src/ggml-hexagon/libggml-htp-v75.so \
+   "$BUILD_DIR"/sdcpp/ggml/src/ggml-hexagon/libggml-htp-v79.so \
    "$BUILD_DIR"/sdcpp/ggml/src/ggml-hexagon/libggml-htp-v81.so \
    "$ASSET_DIR/"
 ls -la "$JNI_DIR" "$ASSET_DIR"
