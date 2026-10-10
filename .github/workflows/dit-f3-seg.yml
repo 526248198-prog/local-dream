@@ -1,0 +1,138 @@
+# F3 segmented engine (v75 max-vram cap) for 8Gen3 (SM8650/HTP v75): libdit_engine.so CPU side
+# with DSP-mapping counters + failed-chunk tensor names (dit/*-f2diag.patch),
+# plus the v75 skel. Adapted from nightmare-mobile's proven dit-engine.yml:
+# same runner, same NDK route, same Hexagon-via-docker route.
+#
+# Triggers on push to branch f3-seg (or manually). Artifact: libdit_engine.so
+# + v75/v79/v81 skels. Only this .so goes into the APK (lib/arm64-v8a/).
+name: dit-f3-seg
+
+on:
+  push:
+    branches: [f3-seg]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Reclaim disk
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost \
+                      /usr/local/lib/android/sdk/ndk /opt/hostedtoolcache/CodeQL \
+                      /usr/local/share/powershell /usr/share/swift || true
+          sudo apt-get clean
+          df -h /
+
+      - name: Checkout (this branch)
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      # ONLY stable-diffusion.cpp (+ its ggml): the engine links nothing else.
+      - name: Fetch stable-diffusion.cpp at the pinned revision
+        run: |
+          git submodule update --init --recursive --depth 1 -- app/src/main/cpp/3rdparty/stable-diffusion.cpp
+          cd app/src/main/cpp/3rdparty/stable-diffusion.cpp
+          echo "SDCPP_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "GGML_SHA=$(git -C ggml rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Install NDK 29.0.14206865
+        run: |
+          SDK="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDK" --licenses >/dev/null 2>&1 || true
+          "$SDK" "ndk;29.0.14206865" || "$SDK" --channel=3 "ndk;29.0.14206865"
+          NDK="$ANDROID_HOME/ndk/29.0.14206865"
+          if [ ! -d "$NDK" ]; then
+            echo "::error::NDK did not install"; ls "$ANDROID_HOME/ndk" || true; exit 1
+          fi
+          echo "ANDROID_NDK_ROOT=$NDK" >> "$GITHUB_ENV"
+
+      # Hexagon SDK via the public toolchain image (no Qualcomm login).
+      # docker create never starts a container: file copy out of an image layer.
+      - name: Extract the Hexagon SDK
+        run: |
+          set -euo pipefail
+          docker create --name hexsdk ghcr.io/snapdragon-toolchain/arm64-android:v0.7
+          DEST="$RUNNER_TEMP/hexsdk"
+          mkdir -p "$DEST"
+          docker cp hexsdk:/opt/hexagon - | tar -x -C "$DEST" --no-same-permissions --no-same-owner
+          docker rm hexsdk
+          chmod -R u+rwX "$DEST"
+          MARK=$(find "$DEST" -maxdepth 3 -name setup_sdk_env.source | sort -V | tail -1)
+          if [ -n "$MARK" ]; then
+            ROOT=$(dirname "$MARK")
+          else
+            ROOT=$(find "$DEST" -mindepth 2 -maxdepth 2 -type d -name '[0-9]*' | sort -V | tail -1)
+          fi
+          if [ -z "$ROOT" ]; then
+            echo "::error::no Hexagon SDK root under $DEST"; find "$DEST" -maxdepth 3 | head -40; exit 1
+          fi
+          echo "HEXAGON_SDK_ROOT=$ROOT" >> "$GITHUB_ENV"
+          echo "found SDK at $ROOT"
+
+      # F2 diagnostic patches (kept for validation), each asserted to actually change its repo
+      # (a silently no-op patch is worse than a failure).
+      - name: Apply F2 diagnostic patches (kept for validation)
+        run: |
+          set -euo pipefail
+          SDCPP=app/src/main/cpp/3rdparty/stable-diffusion.cpp
+          DIT=app/src/main/cpp/dit
+          before_ggml=$(git -C "$SDCPP/ggml" diff | sha256sum)
+          git -C "$SDCPP/ggml" apply -v "$GITHUB_WORKSPACE/$DIT/ggml-f2diag.patch"
+          after_ggml=$(git -C "$SDCPP/ggml" diff | sha256sum)
+          if [ "$before_ggml" = "$after_ggml" ]; then
+            echo "::error::ggml-f2diag.patch applied nothing"; exit 1
+          fi
+          before_sdcpp=$(git -C "$SDCPP" diff | sha256sum)
+          git -C "$SDCPP" apply -v "$GITHUB_WORKSPACE/$DIT/sdcpp-f2diag.patch"
+          after_sdcpp=$(git -C "$SDCPP" diff | sha256sum)
+          if [ "$before_sdcpp" = "$after_sdcpp" ]; then
+            echo "::error::sdcpp-f2diag.patch applied nothing"; exit 1
+          fi
+          echo "files touched:"
+          git -C "$SDCPP/ggml" diff --stat
+          git -C "$SDCPP" diff --stat
+
+      - name: Record the ABI version
+        run: |
+          V=$(sed -n 's/^#define DIT_ENGINE_ABI_VERSION \([0-9]*\).*/\1/p' app/src/main/cpp/include/DitEngine.h)
+          echo "ABI_VERSION=$V" >> "$GITHUB_ENV"
+          echo "DIT_ENGINE_ABI_VERSION=$V"
+
+      - name: Build
+        run: |
+          cd app/src/main/cpp
+          bash dit/build.sh
+          df -h /
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          cd app/src/main
+          mkdir -p "$GITHUB_WORKSPACE/out"
+          cp jniLibs/arm64-v8a/libdit_engine.so "$GITHUB_WORKSPACE/out/"
+          cp assets/ditlibs/libggml-htp-v75.so assets/ditlibs/libggml-htp-v79.so assets/ditlibs/libggml-htp-v81.so "$GITHUB_WORKSPACE/out/"
+          cd "$GITHUB_WORKSPACE/out"
+          sha256sum libdit_engine.so libggml-htp-v*.so
+          {
+            echo "## F3 segmented engine (v75 max-vram cap)"
+            echo
+            echo "| local-dream | \`$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)\` |"
+            echo "| stable-diffusion.cpp | \`$SDCPP_SHA\` |"
+            echo "| ggml | \`$GGML_SHA\` |"
+            echo "| ABI version | \`$ABI_VERSION\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: dit-f3-seg
+          path: out/
+          if-no-files-found: error

@@ -6,6 +6,8 @@
 
 #include "DitEngine.h"
 
+#include <sys/system_properties.h>
+
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
@@ -159,6 +161,19 @@ dit_ctx *engine_create(const dit_ctx_params *params) {
   // the next graph segment with HTP execution. Component-level residency is
   // controlled separately by params_backend=all=disk.
   sd_params.disable_prefetch = false;
+  // F3 (8Gen3/SM8650, HTP v75): the DSP heap is smaller than 8 Elite's, and
+  // the HTP backend reports no device memory, so without an explicit budget
+  // the runner's fits() check always passes and flux is prepared monolithically
+  // (~3.7GB, fastrpc_mmap dies at ~3.6GB). Capping the graph budget engages the
+  // existing per-cut segmented path (flux already emits cut markers per block).
+  // TE peaks at ~1.5GB and stays monolithic (fast); only DiT segments. v79+
+  // keeps the default (no cap, validated upstream behaviour).
+  {
+    char soc[92] = {};
+    if (__system_property_get("ro.soc.model", soc) > 0 && std::strstr(soc, "SM8650") != nullptr) {
+      sd_params.max_vram = "2";
+    }
+  }
   if (params->backend && params->backend[0]) sd_params.backend = params->backend;
   if (params->params_backend && params->params_backend[0])
     sd_params.params_backend = params->params_backend;
