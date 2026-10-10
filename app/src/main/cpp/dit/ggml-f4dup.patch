@@ -1,0 +1,26 @@
+diff --git a/src/ggml-cpu/ops.cpp b/src/ggml-cpu/ops.cpp
+--- a/src/ggml-cpu/ops.cpp
++++ b/src/ggml-cpu/ops.cpp
+@@ -564,9 +564,19 @@ void ggml_compute_forward_dup(
+             } break;
+         default:
+             {
+                 if (ggml_is_quantized(src0->type) && dst->type == GGML_TYPE_F32) {
+                     ggml_compute_forward_dup_from_q(params, dst);
+                     break;
+                 }
+-                GGML_ABORT("fatal error");
++                // F4 (8Gen3 segmented path): Disk-resident F8 weights are staged
++                // through CPU dup, a path that never runs upstream (monolithic).
++                // F8_E4M3 has blck_size 1 + to_float traits, so the generic
++                // from_q row loop dequantizes it exactly like a quant type.
++                if (src0->type == GGML_TYPE_F8_E4M3 && dst->type == GGML_TYPE_F32) {
++                    ggml_compute_forward_dup_from_q(params, dst);
++                    break;
++                }
++                GGML_ABORT("dup unhandled: src %s [%lld] dst %s [%lld]",
++                    ggml_type_name(src0->type), (long long) ggml_nelements(src0),
++                    ggml_type_name(dst->type), (long long) ggml_nelements(dst));
+             }
+     }
+ }
